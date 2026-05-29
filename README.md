@@ -10,6 +10,7 @@ Visual Basic 6.0 Model Context Protocol Server for AI coding assistants (SOLO / 
 - Open VB6 IDE
 - Run and stop VB6 projects
 - Auto-detect VB6 installation and stdole2.tlb
+- **v1.0.4**: Reliable compilation error reporting (exit code, MZ header validation, error parsing)
 
 ## Quick Start
 
@@ -28,7 +29,7 @@ Add to your SOLO / Trae IDE MCP settings:
 {
   "mcpServers": {
     "vb6": {
-      "command": "path/to/vb6mcp-v1.0.3.exe"
+      "command": "path/to/vb6mcp-v1.0.4.exe"
     }
   }
 }
@@ -68,6 +69,28 @@ Ask your AI assistant to create VB6 projects, compile code, etc.
 | `vb6_stop` | Stop running VB6 |
 | `vb6_project_info` | Get project info |
 | `vb6_list_projects` | List .vbp files |
+
+## Changelog
+
+### v1.0.4
+- Fixed `vb6_compile` returning false positive on compilation failure
+- Added process exit code capture
+- Added EXE file validation (size check + MZ header)
+- Added compile error parsing from `/out` output file
+- Process cleanup on timeout
+
+### v1.0.3
+- Added `vb6_write_code` for writing VB6 source files
+- Added `vb6_read_code` for reading VB6 source files
+
+### v1.0.2
+- Added `vb6_open_ide`, `vb6_run`, `vb6_stop`
+
+### v1.0.1
+- Added `vb6_add_module`, `vb6_add_form`, `vb6_add_class`
+
+### v1.0.0
+- Initial release with core tools
 
 ## Requirements
 

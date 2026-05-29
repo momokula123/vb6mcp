@@ -1,5 +1,5 @@
 """
-VB6 MCP Server v1.0.2 - Compatible with SOLO / Trae IDE MCP client
+VB6 MCP Server v1.0.4 - Compatible with SOLO / Trae IDE MCP client
 Uses line-based JSON over stdio (MCP stdio transport standard)
 """
 import sys
@@ -10,7 +10,7 @@ import re
 import uuid
 import time
 
-VERSION = "1.0.2"
+VERSION = "1.0.4"
 DEFAULT_VB6_PATH = r"C:\Program Files (x86)\VB6Mini\bin\VB6.EXE"
 
 vb6_path = DEFAULT_VB6_PATH
@@ -56,13 +56,58 @@ def run_vb6(args, timeout=120):
         return None, "VB6.EXE not found"
     try:
         flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
-        proc = subprocess.Popen([exe] + args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, creationflags=flags)
-        proc.wait(timeout=timeout)
-        return proc, None
+        proc = subprocess.Popen(
+            [exe] + args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            creationflags=flags,
+        )
+        stdout, stderr = proc.communicate(timeout=timeout)
+        return proc, None, stdout, stderr
     except subprocess.TimeoutExpired:
-        return None, f"VB6 timed out after {timeout}s"
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        return None, f"VB6 timed out after {timeout}s", b"", b""
     except Exception as e:
-        return None, str(e)
+        return None, str(e), b"", b""
+
+
+def validate_exe(filepath):
+    if not os.path.isfile(filepath):
+        return False, "File does not exist"
+    size = os.path.getsize(filepath)
+    if size < 1024:
+        return False, f"File too small ({size} bytes), not a valid EXE"
+    try:
+        with open(filepath, "rb") as f:
+            header = f.read(2)
+        if header != b"MZ":
+            return False, "Not a valid PE/EXE file (missing MZ header)"
+    except Exception as e:
+        return False, f"Cannot read file: {e}"
+    return True, None
+
+
+def parse_compile_output(out_file):
+    errors = []
+    try:
+        with open(out_file, "r", encoding="gbk", errors="replace") as f:
+            content = f.read()
+    except Exception:
+        return None
+    for pattern in [
+        r"编译错误.*?,\s*行\s*(\d+)\s*:\s*(.+)",
+        r"compile error.*?line\s*(\d+)\s*:\s*(.+)",
+        r"权限被拒绝",
+        r"permission denied",
+        r"编译失败",
+        r"compile failed",
+    ]:
+        for m in re.finditer(pattern, content, re.IGNORECASE):
+            errors.append(m.group(0) if m.lastindex == 0 else f"Line {m.group(1)}: {m.group(2)}")
+    return errors if errors else [content.strip()[:500]] if content.strip() else None
 
 
 def parse_vbp(filepath):
@@ -363,19 +408,38 @@ def handle_tool(name, args):
         if not os.path.isfile(pf):
             return {"success": False, "error": f"Not found: {pf}"}
         a = ["/make", pf]
-        if args.get("output_file"):
-            a.extend(["/out", args["output_file"]])
-        proc, err = run_vb6(a, timeout=args.get("timeout", 120))
+        out_file = args.get("output_file")
+        if out_file:
+            a.extend(["/out", out_file])
+        proc, err, stdout, stderr = run_vb6(a, timeout=args.get("timeout", 120))
         if err:
             return {"success": False, "error": err}
+        exit_code = proc.returncode if proc else -1
         proj_dir = os.path.dirname(pf)
         proj_name = os.path.splitext(os.path.basename(pf))[0]
-        exe = args.get("output_file") or os.path.join(proj_dir, proj_name + ".exe")
-        ok = os.path.isfile(exe)
-        r = {"success": ok, "exe_file": exe, "exe_exists": ok}
-        if not ok:
-            r["error"] = "EXE not found after compile."
-        return r
+        exe = out_file or os.path.join(proj_dir, proj_name + ".exe")
+        is_valid, val_err = validate_exe(exe)
+        if is_valid:
+            return {"success": True, "exe_file": exe, "exe_exists": True, "exit_code": exit_code, "size": os.path.getsize(exe)}
+        compile_errors = []
+        if out_file and os.path.isfile(out_file):
+            parsed = parse_compile_output(out_file)
+            if parsed:
+                compile_errors = parsed
+        if stderr:
+            try:
+                compile_errors.append(stderr.decode("gbk", errors="replace").strip()[:300])
+            except Exception:
+                pass
+        if stdout:
+            try:
+                compile_errors.append(stdout.decode("gbk", errors="replace").strip()[:300])
+            except Exception:
+                pass
+        error_msg = val_err or "Compilation failed"
+        if compile_errors:
+            error_msg += " | " + "; ".join(compile_errors)
+        return {"success": False, "error": error_msg, "exit_code": exit_code, "exe_file": exe}
 
     elif name == "vb6_create_project":
         return create_project_impl(args["project_dir"], args["project_name"], args.get("project_type", "Standard EXE"))
